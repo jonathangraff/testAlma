@@ -6,11 +6,6 @@ from time import sleep, time
 REAL_LIFE_SECOND = 0.001
 
 
-class Mineral(Enum):
-   FOO = "Foo"
-   BAR = "Bar"
-
-
 class Action(Enum):
    IDLE = "Idle"
    MINING_FOO = "Mining Foo"
@@ -26,8 +21,6 @@ def wait(t: float):
    sleep(t * REAL_LIFE_SECOND)
 
 
-
-
 class Robot(threading.Thread):
     
     resources = {
@@ -38,6 +31,25 @@ class Robot(threading.Thread):
     }
     lock = threading.Lock()
     robots = []
+
+    class activity:
+        """Crée un context manager pour uniformiser les différentes actions des robots"""
+        def __init__(self, robot, action: Action, waiting_time: float, message: str):
+            self.__robot = robot
+            self.__action = action
+            self.__waiting_time = waiting_time
+            self.__message = message
+
+        def __enter__(self):
+            self.__robot.change_status(self.__action)
+            wait(self.__waiting_time)
+            Robot.lock.acquire()
+
+        def __exit__(self, a, b, c):
+            Robot.lock.release()
+            self.__robot.last_action = self.__action
+            logging.info(self.__message)
+            self.__robot.change_status(Action.IDLE)
 
     def __init__(self):
         logging.info("Initialization of new robot")
@@ -53,104 +65,63 @@ class Robot(threading.Thread):
         logging.info(get_resources_str())
         self.status = action
 
-    def mine(self, mineral: Mineral):
-        match mineral:
-            case Mineral.FOO:
-                self.change_status(Action.MINING_FOO)
-                wait(1)
-                with Robot.lock:
-                    Robot.resources["foo"] += 1
-                self.last_action = Action.MINING_FOO
-            case Mineral.BAR:
-                self.change_status(Action.MINING_BAR)
-                wait(random() * 1.5 + 0.5) # entre 0.5 et 2 sec
-                with Robot.lock:
-                    Robot.resources["bar"] += 1
-                self.last_action = Action.MINING_BAR
-            case _:
-                raise Exception("Mineral not taken in account")
-        self.change_status(Action.IDLE)
+    def mine_foo(self):
+        with Robot.activity(self, Action.MINING_FOO, 1, f"Robot {self.id} MINED 1 FOO"):
+            Robot.resources["foo"] += 1
+
+    def mine_bar(self):
+        with Robot.activity(self, Action.MINING_BAR, random() * 1.5 + 0.5, f"Robot {self.id} MINED 1 BAR"):
+            Robot.resources["bar"] += 1
 
     def assemble(self):
-        self.change_status(Action.ASSEMBLING)
-        with Robot.lock:
-            if Robot.resources["foo"] < 1 or Robot.resources["bar"] < 1:
-                return
-            Robot.resources["foo"] -= 1
-            Robot.resources["bar"] -= 1
-        wait(2)
-        if random() < 0.6: # Success case
-            with Robot.lock:
+        with Robot.activity(self, Action.ASSEMBLING, 2, f"Robot {self.id} TRIED TO ASSEMBLE 1 FOOBAR"):
+            if random() < 0.6: # Success case
                 Robot.resources["foobar"] += 1
-            logging.info(f"ROBOT {self.id} ASSEMBLING SUCCESS")
-        else:
-            with Robot.lock:
+                message = f"ROBOT {self.id} ASSEMBLING SUCCESS"
+            else:
                 Robot.resources["bar"] += 1
-            logging.info(f"ROBOT {self.id} ASSEMBLING FAILURE")
-        self.last_action: Action = Action.ASSEMBLING
-        self.change_status(Action.IDLE)
+                message = f"ROBOT {self.id} ASSEMBLING FAILURE"
+        logging.info(message)
 
-    def sell(self):
-        nb_foobar = min(5, Robot.resources["foobar"])
-        self.change_status(Action.SELLING)
-        with Robot.lock:
-            if Robot.resources["foobar"] < nb_foobar:
-                return
-            Robot.resources["foobar"] -= nb_foobar
-        wait(10)
-        with Robot.lock:
+    def sell(self, nb_foobar: int):
+        with Robot.activity(self, Action.SELLING, 10, f"ROBOT {self.id} SOLD {nb_foobar} FOOBAR"):
             Robot.resources["euros"] += nb_foobar
-        self.last_action = Action.SELLING
-        logging.info(f"ROBOT {self.id} SOLD {nb_foobar} FOOBAR")
-        self.change_status(Action.IDLE)
-
+        
     def buy_robot(self):
-        self.change_status(Action.BUYING)
-        with Robot.lock:
-            if Robot.resources["foo"] < 6 or Robot.resources["euros"] < 3:
-                return
-            Robot.resources["euros"] -= 3
-            Robot.resources["foo"] -= 6
-        wait(1)
-        Robot()
-        logging.info(f"ROBOT {self.id} BOUGHT A ROBOT")
-        self.last_action = Action.BUYING
-        self.change_status(Action.IDLE)
+        with Robot.activity(self, Action.BUYING, 1, f"ROBOT {self.id} BOUGHT A ROBOT"):
+            Robot()
 
     def change_activity(self):
-        self.change_status(Action.CHANGING_ACTIVITY)
-        wait(5)
-        self.last_action: Action = Action.CHANGING_ACTIVITY
-        self.change_status(Action.IDLE)
-
+        with Robot.activity(self, Action.CHANGING_ACTIVITY, 5, f"ROBOT {self.id} CHANGED ACTIVITY"):
+            pass
 
 def get_resources_str():
-    return f"{Robot.resources["foo"]=} {Robot.resources["bar"]=} {Robot.resources["foobar"]=} {Robot.resources["euros"]=} Nb Robots : {len(Robot.robots)}."
+    return f"foo : {Robot.resources["foo"]}   bar : {Robot.resources["bar"]}   foobar : {Robot.resources["foobar"]}   euros : {Robot.resources["euros"]}   Nb Robots : {len(Robot.robots)}."
 
 
 def choose_task_to_do_if_idle(robot: Robot):
     while len(Robot.robots) <= 30:
         with Robot.lock:
-            foo = Robot.resources["foo"]
-            bar = Robot.resources["bar"]
-            euros = Robot.resources["euros"]
-            foobar = Robot.resources["foobar"]
-        if euros >= 3:
-            if foo >= 6:
-                robot.buy_robot()
+            if Robot.resources["euros"] >= 3:
+                if Robot.resources["foo"] >= 6:
+                    Robot.resources["foo"] -= 6
+                    Robot.resources["euros"] -= 3
+                    action_to_perform, args = robot.buy_robot, ()
+                else:
+                    action_to_perform, args = robot.mine_foo, ()
+            elif Robot.resources["foobar"] >= 1:
+                nb_foobar = min(5, Robot.resources["foobar"])
+                Robot.resources["foobar"] -= nb_foobar
+                action_to_perform, args = robot.sell, (nb_foobar,)
+            elif Robot.resources["foo"] >= 1 and Robot.resources["bar"] >= 1:
+                Robot.resources["foo"] -= 1
+                Robot.resources["bar"] -= 1
+                action_to_perform, args = robot.assemble, ()
+            elif Robot.resources["foo"] > Robot.resources["bar"]:
+                action_to_perform, args = robot.mine_bar, ()
             else:
-                robot.mine(Mineral.FOO)
-            continue
-        if foobar >= 1:
-            robot.sell()
-            continue
-        if foo >= 1 and bar >= 1:
-            robot.assemble()
-            continue
-        if foo > bar:
-            robot.mine(Mineral.BAR)
-            continue
-        robot.mine(Mineral.FOO)
+                action_to_perform, args = robot.mine_foo, ()
+        action_to_perform(*args)
     
 
 
