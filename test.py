@@ -1,7 +1,7 @@
 from enum import Enum
 from random import random
-import asyncio, time
-
+import threading, logging
+from time import sleep, time
 
 REAL_LIFE_SECOND = 0.001
 
@@ -11,136 +11,159 @@ class Mineral(Enum):
    BAR = "Bar"
 
 
-class Status(Enum):
+class Action(Enum):
    IDLE = "Idle"
    MINING_FOO = "Mining Foo"
    MINING_BAR = "Mining Bar"
-   ASSEMBLING = "Assembling a Foo and a Bar"
+   ASSEMBLING = "Assembling a Foo and a Bar for a Foobar"
    SELLING = "Selling Foobar"
    BUYING = "Buying a new Robot"
    CHANGING_ACTIVITY = "Changing Activity"
 
 
-async def wait(t: float):
+def wait(t: float):
    """This function waits for t seconds, applying the factor REAL_LIFE_SECOND."""
-   await asyncio.sleep(t * REAL_LIFE_SECOND)
+   sleep(t * REAL_LIFE_SECOND)
 
 
-class Robot:
+
+
+class Robot(threading.Thread):
+    
+    resources = {
+        "foo": 0,
+        "bar": 0,
+        "foobar": 0,
+        "euros": 0,
+    }
+    lock = threading.Lock()
     robots = []
-    foo = bar = foobar = euros = 0
 
     def __init__(self):
+        logging.info("Initialization of new robot")
+        super().__init__(target=choose_task_to_do_if_idle, args=(self,))
         self.id: int = len(Robot.robots)
-        self.status: Status = Status.IDLE
-        self.last_action: Status = Status.IDLE
+        self.status: Action = Action.IDLE
+        self.last_action: Action = Action.IDLE
         Robot.robots.append(self)
+        self.start()
 
-    async def mine(self, mineral: Mineral):
-        print_resources()
-        if mineral == Mineral.FOO:
-            self.status = Status.MINING_FOO
-            await wait(1)
-            Robot.foo += 1
-            self.last_action: Status = Status.MINING_FOO
-        elif mineral == Mineral.BAR:
-            self.status = Status.MINING_BAR
-            await wait(random() * 1.5 + 0.5) # entre 0.5 et 2 sec
-            Robot.bar += 1
-            self.last_action: Status = Status.MINING_BAR
-        else:
-            raise Exception("Mineral not taken in account")
-        self.print_status_and_resources()
-        self.status = Status.IDLE
+    def change_status(self, action: Action):
+        logging.info(f"Robot {self.id} : {action.value}")
+        logging.info(get_resources_str())
+        self.status = action
 
-    async def assemble(self):
-        print(f"ASSEMBLING")
-        print_resources()
-        self.status == Status.ASSEMBLING
-        await wait(2)
+    def mine(self, mineral: Mineral):
+        match mineral:
+            case Mineral.FOO:
+                self.change_status(Action.MINING_FOO)
+                wait(1)
+                with Robot.lock:
+                    Robot.resources["foo"] += 1
+                self.last_action = Action.MINING_FOO
+            case Mineral.BAR:
+                self.change_status(Action.MINING_BAR)
+                wait(random() * 1.5 + 0.5) # entre 0.5 et 2 sec
+                with Robot.lock:
+                    Robot.resources["bar"] += 1
+                self.last_action = Action.MINING_BAR
+            case _:
+                raise Exception("Mineral not taken in account")
+        self.change_status(Action.IDLE)
+
+    def assemble(self):
+        self.change_status(Action.ASSEMBLING)
+        with Robot.lock:
+            if Robot.resources["foo"] < 1 or Robot.resources["bar"] < 1:
+                return
+            Robot.resources["foo"] -= 1
+            Robot.resources["bar"] -= 1
+        wait(2)
         if random() < 0.6: # Success case
-            Robot.foo -= 1
-            Robot.bar -= 1
-            Robot.foobar += 1
-            print(f"ASSEMBLING SUCCESS {Robot.foobar = }")
+            with Robot.lock:
+                Robot.resources["foobar"] += 1
+            logging.info(f"ROBOT {self.id} ASSEMBLING SUCCESS")
         else:
-            Robot.foo -= 1
-            print(f"ASSEMBLING FAILURE {Robot.foobar = }")
-        self.print_status_and_resources()
-        self.last_action: Status = Status.ASSEMBLING
-        self.status = Status.IDLE
+            with Robot.lock:
+                Robot.resources["bar"] += 1
+            logging.info(f"ROBOT {self.id} ASSEMBLING FAILURE")
+        self.last_action: Action = Action.ASSEMBLING
+        self.change_status(Action.IDLE)
 
-    async def sell(self):
-        print_resources()
-        nb_foobar = min(5, Robot.foobar)
-        self.status = Status.SELLING
-        await wait(10)
-        Robot.foobar -= nb_foobar
-        Robot.euros += nb_foobar
-        self.last_action: Status = Status.SELLING
-        self.status = Status.IDLE
-        print(f"SOLD {nb_foobar} FOOBAR")
-        self.print_status_and_resources()
+    def sell(self):
+        nb_foobar = min(5, Robot.resources["foobar"])
+        self.change_status(Action.SELLING)
+        with Robot.lock:
+            if Robot.resources["foobar"] < nb_foobar:
+                return
+            Robot.resources["foobar"] -= nb_foobar
+        wait(10)
+        with Robot.lock:
+            Robot.resources["euros"] += nb_foobar
+        self.last_action = Action.SELLING
+        logging.info(f"ROBOT {self.id} SOLD {nb_foobar} FOOBAR")
+        self.change_status(Action.IDLE)
 
-    async def buy_robot(self):
-        print_resources()
-        self.status = Status.BUYING
-        await wait(1)
+    def buy_robot(self):
+        self.change_status(Action.BUYING)
+        with Robot.lock:
+            if Robot.resources["foo"] < 6 or Robot.resources["euros"] < 3:
+                return
+            Robot.resources["euros"] -= 3
+            Robot.resources["foo"] -= 6
+        wait(1)
         Robot()
-        Robot.euros -= 3
-        Robot.foo -= 6
-        self.last_action: Status = Status.BUYING
-        self.status = Status.IDLE
-        self.print_status_and_resources()
+        logging.info(f"ROBOT {self.id} BOUGHT A ROBOT")
+        self.last_action = Action.BUYING
+        self.change_status(Action.IDLE)
 
-    async def change_activity(self):
-        self.status = Status.CHANGING_ACTIVITY
-        await wait(5)
-        self.last_action: Status = Status.CHANGING_ACTIVITY
-        self.status = Status.IDLE
-       
-    def print_status_and_resources(self):
-        print(f"{self.status.value}")
-        print_resources()
-       
-
-def get_idle_robots():
-    return [robot for robot in Robot.robots if robot.status == Status.IDLE]
+    def change_activity(self):
+        self.change_status(Action.CHANGING_ACTIVITY)
+        wait(5)
+        self.last_action: Action = Action.CHANGING_ACTIVITY
+        self.change_status(Action.IDLE)
 
 
-def print_resources():
-    print(f"{Robot.foo=} {Robot.bar=} {Robot.foobar=} {Robot.euros=}.")
+def get_resources_str():
+    return f"{Robot.resources["foo"]=} {Robot.resources["bar"]=} {Robot.resources["foobar"]=} {Robot.resources["euros"]=} Nb Robots : {len(Robot.robots)}."
 
 
-def choose_task_to_do(robot: Robot):
-    if Robot.euros >= 3:
-        if Robot.foo >= 6:
-            return robot.buy_robot()
-        else:
-            return robot.mine(Mineral.FOO)
-    if Robot.foobar >= 1:
-        return robot.sell()
-    if Robot.foo >= 1 and Robot.bar >= 1:
-        return robot.assemble()
-    if Robot.foo > Robot.bar:
-        return robot.mine(Mineral.BAR)
-    return robot.mine(Mineral.FOO)
+def choose_task_to_do_if_idle(robot: Robot):
+    while len(Robot.robots) <= 30:
+        with Robot.lock:
+            foo = Robot.resources["foo"]
+            bar = Robot.resources["bar"]
+            euros = Robot.resources["euros"]
+            foobar = Robot.resources["foobar"]
+        if euros >= 3:
+            if foo >= 6:
+                robot.buy_robot()
+            else:
+                robot.mine(Mineral.FOO)
+            continue
+        if foobar >= 1:
+            robot.sell()
+            continue
+        if foo >= 1 and bar >= 1:
+            robot.assemble()
+            continue
+        if foo > bar:
+            robot.mine(Mineral.BAR)
+            continue
+        robot.mine(Mineral.FOO)
+    
 
 
-async def main():
-    started_at = time.monotonic()
+def main():
+    started_at = time()
     Robot()
     Robot()
-    while len(Robot.robots) < 10:
-        idle_robots: list[Robot] = get_idle_robots()
-        print("*"*100, len(idle_robots))
-        # tasks = []
-        for robot in idle_robots:
-            task = asyncio.create_task(choose_task_to_do(robot))
-            # tasks.append(task)
-            await task
-
-    total_time = (time.monotonic() - started_at)/REAL_LIFE_SECOND
+    for r in Robot.robots:
+        r.join()
+    total_time = (time() - started_at)/REAL_LIFE_SECOND
     print(f"{total_time = }")
 
-asyncio.run(main())
+if __name__=="__main__":
+    format = "%(message)s"
+    logging.basicConfig(format=format, level=logging.INFO)
+    main()
