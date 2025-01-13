@@ -97,7 +97,7 @@ class Robot(threading.Thread):
 
 def get_resources_string():
     res=Robot.resources
-    return f"foo : {res["foo"]}   bar : {res["bar"]}   foobar : {res["foobar"]}   euros : {res["euros"]}   Nb Robots : {len(Robot.robots)}."
+    return f"foo : {res['foo']}   bar : {res['bar']}   foobar : {res['foobar']}   euros : {res['euros']}   Nb Robots : {len(Robot.robots)}."
 
 
 def choose_task_to_do_if_idle(robot: Robot):
