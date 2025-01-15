@@ -10,7 +10,6 @@ class Action(Enum):
     SELL_FOOBAR = "Selling Foobar"
     BUY_ROBOT = "Buying a new Robot"
     CHANGE_ACTIVITY = "Changing Activity"
-    
 
 
 class Rss(Enum):
@@ -18,6 +17,7 @@ class Rss(Enum):
     BAR = "bar"
     FOOBAR = "foobar"
     EUROS = "euros"
+
 
 REAL_LIFE_SECOND = 0.001
 MAX_ROBOTS = 30

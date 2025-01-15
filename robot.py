@@ -160,3 +160,4 @@ class Robot(threading.Thread):
         if Robot.resources[Rss.FOO] > Robot.resources[Rss.BAR]:
             return Action.MINE_BAR
         return Action.MINE_FOO
+    
