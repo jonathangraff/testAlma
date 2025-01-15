@@ -3,8 +3,7 @@ import threading, logging
 from contextlib import contextmanager
 from time import sleep
 
-from action import Action
-from const import REAL_LIFE_SECOND, MAX_ROBOTS
+from const import Action, Rss, REAL_LIFE_SECOND, MAX_ROBOTS
 
 
 def wait(t: float):
@@ -14,18 +13,9 @@ def wait(t: float):
 
 class Robot(threading.Thread):
     
-    resources = {
-        "foo": 0,
-        "bar": 0,
-        "foobar": 0,
-        "euros": 0,
-    }
+    resources = {rss: 0 for rss in Rss}
     lock = threading.Lock()
     robots = []
-
-    def get_resources_string():
-        res = Robot.resources
-        return f"foo : {res['foo']}   bar : {res['bar']}   foobar : {res['foobar']}   euros : {res['euros']}   Nb Robots : {len(Robot.robots)}."
 
     def __init__(self):
         logging.info("Initialization of a new robot")
@@ -36,135 +26,137 @@ class Robot(threading.Thread):
         Robot.robots.append(self)
         self.start()
 
-    def change_status(self, action: Action):
+    def _change_status(self, action: Action):
         logging.info(f"Robot {self.id} : {action.value}")
-        logging.info(Robot.get_resources_string())
+        # displays the current resources and number of robots :
+        logging.info(f"{'   '.join([f'{rss.value} : {Robot.resources[rss]}' for rss in Rss])}   Nb Robots : {len(Robot.robots)}.")
         self.status = action
 
     @contextmanager
-    def activity(self, action: Action, waiting_time: float, message: str =""):
-        """Creates a context manager to uniformize the different actions of the robots"""
+    def _activity(self, action: Action, nb_foobar=0):
+        """Creates a context manager to regroup all stuff to do before and after an action"""
 
-        self.change_status(action)
-        wait(waiting_time)
+        self._change_status(action)
+        wait(self.get_waiting_time_from_action(action))
         Robot.lock.acquire()
+
         yield
+        
         Robot.lock.release()
-        self.last_action = action
+        self.last_action = Action.ASSEMBLE if action in {Action.ASSEMBLE_SUCCESS, Action.ASSEMBLE_FAIL} else action
+        message = self.get_parameters_from_action(action, "message", nb_foobar)
         if message:
             logging.info(f"Robot {self.id} " + message)
-        self.change_status(Action.IDLE)
+        self._change_status(Action.IDLE)
 
     def mine_foo(self):
-        with self.activity(Action.MINE_FOO, waiting_time=1, message="MINED 1 FOO"):
-            Robot.resources["foo"] += 1
+        with self._activity(Action.MINE_FOO):
+            Robot.resources[Rss.FOO] += 1
 
     def mine_bar(self):
-        with self.activity(Action.MINE_BAR, waiting_time=random() * 1.5 + 0.5, message="MINED 1 BAR"):
-            Robot.resources["bar"] += 1
+        with self._activity(Action.MINE_BAR):
+            Robot.resources[Rss.BAR] += 1
 
     def assemble(self):
-        with self.activity(Action.ASSEMBLE, waiting_time=2):
-            if random() < 0.6:      # Success case
-                Robot.resources["foobar"] += 1
-                message = f"ROBOT {self.id} SUCCESSFULLY ASSEMBLED 1 FOOBAR"
-            else:
-                Robot.resources["bar"] += 1
-                message = f"ROBOT {self.id} FAILED TO ASSEMBLE 1 FOOBAR"
-        logging.info(message)
+        if random() < 0.6:      # Success case
+            with self._activity(Action.ASSEMBLE_SUCCESS):
+                Robot.resources[Rss.FOOBAR] += 1
+        else:
+            with self._activity(Action.ASSEMBLE_FAIL):
+                Robot.resources[Rss.BAR] += 1
 
-    def sell(self, nb_foobar: int):
-        with self.activity(Action.SELL_FOOBAR, waiting_time=10, message=f"SOLD {nb_foobar} FOOBAR"):
-            Robot.resources["euros"] += nb_foobar
+    def sell_foobar(self, nb_foobar: int):
+        with self._activity(Action.SELL_FOOBAR, nb_foobar):
+            Robot.resources[Rss.EUROS] += nb_foobar
         
     def buy_robot(self):
-        with self.activity(Action.BUY_ROBOT, waiting_time=1, message="BOUGHT A ROBOT"):
+        with self._activity(Action.BUY_ROBOT):
             Robot()
 
     def change_activity(self):
-        with self.activity(Action.CHANGE_ACTIVITY, waiting_time=5, message="CHANGED ACTIVITY"):
+        with self._activity(Action.CHANGE_ACTIVITY):
             pass
-
-    def get_function_from_action(self, action: Action):
-        """matches an action with the function asssociated"""
-        match action:
-            case Action.MINE_FOO: 
-                return self.mine_foo
-            case Action.MINE_BAR: 
-                return self.mine_bar
-            case Action.ASSEMBLE: 
-                return self.assemble
-            case Action.SELL_FOOBAR:
-                return self.sell
-            case Action.BUY_ROBOT:
-                return self.buy_robot
-            case Action.CHANGE_ACTIVITY:
-                return self.change_activity
-            case _:
-                raise Exception(f"Action {action} not taken in account")
     
-    def pay_ressources(action: Action) -> tuple[int | None]:
+    def get_parameters_from_action(self, action: Action, parameter: str, nb_foobar=0):
+        if parameter in {"function", "time", "price", "message"}:
+            actions_dictionary = {
+                Action.MINE_FOO: {"function": self.mine_foo, "time": 1, "price": (), "message": "MINED 1 FOO"},
+                Action.MINE_BAR: {"function": self.mine_bar, "time": [0.5, 2], "price": (), "message": "MINED 1 BAR"},
+                Action.ASSEMBLE: {"function": self.assemble, "price": ((Rss.FOO, 1), (Rss.BAR, 1))},
+                Action.ASSEMBLE_SUCCESS: {"time": 2, "message": "ASSEMBLED 1 FOOBAR SUCCESSFULLY"},
+                Action.ASSEMBLE_FAIL: {"time": 2, "message": "FAILED TO ASSEMBLE 1 FOOBAR"},
+                Action.SELL_FOOBAR: {"function": self.sell_foobar, "time": 10, "price": ((Rss.FOOBAR, [5]),), "message": f"SOLD {nb_foobar} FOOBAR"},
+                Action.BUY_ROBOT: {"function": self.buy_robot, "time": 1, "price": ((Rss.FOO, 6), (Rss.EUROS, 3)), "message": "BOUGHT A ROBOT"},
+                Action.CHANGE_ACTIVITY: {"function": self.change_activity, "time": 5, "price": (), "message": "CHANGED ACTIVITY"},
+            }
+            return actions_dictionary[action][parameter]
+        raise Exception(f"Parameter {parameter} not taken in account")  
+            
+    def get_waiting_time_from_action(self, action: Action):
+        """returns the waiting time from the action. If the time is an interval, returns a random number in this interval """
+        time = self.get_parameters_from_action(action, "time")
+        if isinstance(time, int):
+            return time
+        return time[0] + random() * (time[1] - time[0])
+    
+    def pay_resources(self, action: Action) -> list[int | None]:
         """ Pays the necessary resources before performing an action and returns the resources used in case
-            it is necessary to have them for earning resources (exemple : selling foobar). 
-            Returns an empty tuple if not necessary.
+            it is necessary to know them for earning resources (exemple : selling foobar). 
+            Returns an empty list if not necessary.
         """
-        match action:
-            case Action.ASSEMBLE: 
-                Robot.resources["foo"] -= 1
-                Robot.resources["bar"] -= 1
-            case Action.SELL_FOOBAR:
-                nb_foobar = min(5, Robot.resources["foobar"])
-                Robot.resources["foobar"] -= nb_foobar
-                return (nb_foobar,)
-            case Action.BUY_ROBOT:
-                Robot.resources["foo"] -= 6
-                Robot.resources["euros"] -= 3
-            case Action.MINE_FOO | Action.MINE_BAR | Action.IDLE | Action.CHANGE_ACTIVITY:
-                pass
-            case _:
-                raise Exception(f"Action {action.value} not taken in account")
-        return ()
-
+        price = self.get_parameters_from_action(action, "price")
+        args = []
+        for item in price:
+            rss = item[0]        
+            if isinstance(item[1], int):
+                Robot.resources[rss] -= item[1]
+            else:
+                cost = min(item[1][0], Robot.resources[rss])
+                Robot.resources[rss] -= cost
+                args.append(cost)
+        return args
 
     def choose_task_to_do_when_idle(self):
         while len(Robot.robots) <= MAX_ROBOTS:
             with Robot.lock:
                 if self.do_the_same_action():
-                    action_to_perform = self.last_action
+                    action = self.last_action
                 elif self.last_action in {Action.CHANGE_ACTIVITY, Action.IDLE}:
-                    action_to_perform = self.choose_new_action()
+                    action = self.choose_new_action()
                 else:
-                    action_to_perform = Action.CHANGE_ACTIVITY
-                args = Robot.pay_ressources(action_to_perform)
-            self.get_function_from_action(action_to_perform)(*args)
-
+                    action = Action.CHANGE_ACTIVITY
+                args = self.pay_resources(action)
+            
+            self.get_parameters_from_action(action, "function")(*args)
+    
     def do_the_same_action(self) -> bool:
         """decides if the robot performs the same action than before or not"""
         match self.last_action:
             case Action.IDLE | Action.CHANGE_ACTIVITY:
                 return False
             case Action.MINE_FOO:
-                return Robot.resources["foo"] >= 10
+                return Robot.resources[Rss.FOO] <= 10
             case Action.MINE_BAR:
-                return Robot.resources["bar"] >= 10
+                return Robot.resources[Rss.BAR] <= 10
             case Action.ASSEMBLE:
-                return Robot.resources["foo"] >= 1 and Robot.resources["bar"] >= 1
+                return Robot.resources[Rss.FOO] >= 1 and Robot.resources[Rss.BAR] >= 1
             case Action.SELL_FOOBAR:
-                return Robot.resources["foobar"] >= 1
+                return Robot.resources[Rss.FOOBAR] >= 1
             case Action.BUY_ROBOT:
-                return Robot.resources["euros"] >= 3 and Robot.resources["foo"] >= 6
+                return Robot.resources[Rss.EUROS] >= 3 and Robot.resources[Rss.FOO] >= 6
             case _:
                 raise Exception(f"Action {self.last_action} not taken in account")
 
     def choose_new_action(self):
-        if Robot.resources["euros"] >= 3:
-            if Robot.resources["foo"] >= 6:
+        """chooses a new action to do after the robot has finished his "Changing activity" task"""
+        if Robot.resources[Rss.EUROS] >= 3:
+            if Robot.resources[Rss.FOO] >= 6:
                 return Action.BUY_ROBOT
             return Action.MINE_FOO
-        if Robot.resources["foobar"] >= 1:
+        if Robot.resources[Rss.FOOBAR] >= 1:
             return Action.SELL_FOOBAR
-        if Robot.resources["foo"] >= 1 and Robot.resources["bar"] >= 1:
+        if Robot.resources[Rss.FOO] >= 1 and Robot.resources[Rss.BAR] >= 1:
             return Action.ASSEMBLE
-        if Robot.resources["foo"] > Robot.resources["bar"]:
+        if Robot.resources[Rss.FOO] > Robot.resources[Rss.BAR]:
             return Action.MINE_BAR
         return Action.MINE_FOO
